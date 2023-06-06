@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <memory.h>
 #include <stdlib.h>
+
 #include <ncurses.h>
 
 typedef uint32_t instruction;
@@ -133,32 +134,27 @@ void InitializeNCurses() {
   getmaxyx(stdscr, SY, SX);
 }
 
+int LowerLimit = 0;
 void Render(program Program) {
   move(0, 0); clrtobot();
-  int LinesToRender;
-  if(Program.Length > SY) {
-    LinesToRender = SY-1;
-  } else {
-    LinesToRender = Program.Length;
-  }
 
-  // TODO: Scrolling :)
-  for (int i = 0; i < LinesToRender; i++) {
+  int UpperLimit = LowerLimit + SY - 1;
+  for (int i = LowerLimit; i < Program.Length && i <= UpperLimit; i++) {
     char*Disassembly = Disassemble(Program.Instructions[i]);
 
     if(i == Program.Cursor) {
       attron(A_REVERSE);
-      mvprintw(i, 0, "%04d:%-02d| %32s | %-32s | %08X", i+1, Program.Assembly[i].Cursor+1,
+      mvprintw(i-LowerLimit, 0, "%04d:%-02d| %32s | %-32s | %08X", i+1, Program.Assembly[i].Cursor+1,
         Disassembly, Program.Assembly[i].Data, Program.Instructions[i]);
       attroff(A_REVERSE);
       
       if(Program.Assembly[i].Data[Program.Assembly[i].Cursor] != 0) {
-        mvaddch(i, Program.Assembly[i].Cursor+44, Program.Assembly[i].Data[Program.Assembly[i].Cursor]);
+        mvaddch(i-LowerLimit, Program.Assembly[i].Cursor+44, Program.Assembly[i].Data[Program.Assembly[i].Cursor]);
       } else {
-        mvaddch(i, Program.Assembly[i].Cursor+44, ' ');
+        mvaddch(i-LowerLimit, Program.Assembly[i].Cursor+44, ' ');
       }
     } else {
-      mvprintw(i, 0, "%04d:%-02d| %32s | %-32s | %08X", i+1, Program.Assembly[i].Cursor+1,
+      mvprintw(i-LowerLimit, 0, "%04d:%-02d| %32s | %-32s | %08X", i+1, Program.Assembly[i].Cursor+1,
         Disassembly, Program.Assembly[i].Data, Program.Instructions[i]);
       clrtoeol();
     }
@@ -202,6 +198,10 @@ int main(int argc, char**argv) {
         } else if(Program.Length < Program.Capacity) {
           Program.Cursor++;
         }
+
+        if(Program.Cursor >= LowerLimit+SY) {
+          LowerLimit++;
+        }
       break;
 
       case KEY_BACKSPACE:
@@ -220,6 +220,10 @@ int main(int argc, char**argv) {
             Program.Length--;
             Program.Cursor--;
           }
+        }
+
+        if(Program.Cursor < LowerLimit) {
+          LowerLimit--;
         }
       break;
 
@@ -240,6 +244,9 @@ int main(int argc, char**argv) {
       case KEY_UP:
         if(Program.Cursor > 0) {
           Program.Cursor--;
+          if(Program.Cursor < LowerLimit) {
+            LowerLimit--;
+          }
         } else {
           Program.Assembly[Program.Cursor].Cursor = 0;
         }
@@ -248,6 +255,9 @@ int main(int argc, char**argv) {
       case KEY_DOWN:
         if(Program.Cursor < Program.Length-1) {
           Program.Cursor++;
+          if(Program.Cursor >= LowerLimit+SY) {
+            LowerLimit++;
+          }
         } else {
           Program.Assembly[Program.Cursor].Cursor = Program.Assembly[Program.Cursor].Length;
         }
