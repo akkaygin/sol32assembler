@@ -18,9 +18,12 @@ typedef struct {
   uint32_t Cursor;
   instruction*Instructions;
   string*Assembly;
+
+  uint32_t LowerLimit;
+  uint32_t Offset;
 } program;
 
-char*Disassemble(uint32_t Instruction);
+char*Disassemble(uint32_t Instruction, char*Buffer);
 uint32_t Assemble(string Assembly);
 
 void ShiftStringLeft(string*String, uint32_t Amount) {
@@ -115,6 +118,9 @@ void InitializeProgram(program*Program) {
   for(size_t i = 0; i < Program->Capacity; i++) {
     InitializeString(&Program->Assembly[i]);
   }
+
+  Program->LowerLimit = 0;
+  Program->Offset = 0;
 }
 
 void TerminateNCurses() {
@@ -134,37 +140,238 @@ void InitializeNCurses() {
   getmaxyx(stdscr, SY, SX);
 }
 
-int LowerLimit = 0;
-void Render(program Program) {
-  move(0, 0); clrtobot();
+// Fine approach for a single prompt, but what if I want to have more prompts?
+void SaveProgram(program Program)
+{
+  string String;
+  InitializeString(&String);
 
-  int UpperLimit = LowerLimit + SY - 1;
-  for (int i = LowerLimit; i < Program.Length && i <= UpperLimit; i++) {
-    char*Disassembly = Disassemble(Program.Instructions[i]);
+  attron(A_REVERSE);
+  int MP = SY/2;
+  for(int i = 0; i < SX; i++) {
+    mvaddch(MP-2, i, ' ');
+    mvaddch(MP-1, i, ' ');
+    //mvaddch(MP, i, ' ');
+    mvaddch(MP+1, i, ' ');
+    mvaddch(MP+2, i, ' ');
+  }
+  mvprintw(MP-1, SX/2-8, "Save assembly as:");
+  mvprintw(MP+1, SX/2-14, "F1 to cancel, ENTER to save");
+  attroff(A_REVERSE);
+
+  int Key;
+  do { inputhandler:
+    move(MP, 0); clrtoeol();
+    mvprintw(MP, SX/4, "%s", String.Data);
+    Key = getch();
+    switch(Key) {
+      case -1:
+        goto inputhandler;
+      break;
+
+      case KEY_F(1):
+        return;
+      break;
+
+      case '\r':
+      case '\n':
+        goto save;
+      break;
+
+      case KEY_BACKSPACE:
+        if(String.Cursor > 0) {
+          ShiftStringLeft(&String, 1);
+          String.Cursor--;
+        }
+      break;
+
+      default:
+        if(String.Cursor < String.Length) {
+          ShiftStringRight(&String, 1);
+          String.Data[String.Cursor] = Key;
+          String.Cursor++;
+        } else if(String.Length < String.Capacity) {
+          String.Data[String.Cursor] = Key;
+          String.Cursor++;
+          String.Length++;
+        }
+      break;
+    }
+  } while(1); save:
+
+  FILE*FileHandle = fopen(String.Data, "wb");
+  fwrite(Program.Instructions, sizeof(instruction), Program.Length, FileHandle);
+  fclose(FileHandle);
+}
+
+void RenderEditor(program Program) {
+  move(1, 0); clrtobot();
+
+  int UpperLimit = Program.LowerLimit + SY - 2;
+  char*Disassembly = (char*)malloc(32*sizeof(char));
+  for (int i = Program.LowerLimit; i < Program.Length && i <= UpperLimit; i++) {
+    Disassemble(Program.Instructions[i], Disassembly);
 
     if(i == Program.Cursor) {
       attron(A_REVERSE);
-      mvprintw(i-LowerLimit, 0, "%04d:%-02d| %32s | %-32s | %08X", i+1, Program.Assembly[i].Cursor+1,
+      mvprintw(i-Program.LowerLimit+1, 0, "%04d:%0-2d| %32s | %-32s | %08X", i+1, Program.Assembly[i].Cursor+1,
         Disassembly, Program.Assembly[i].Data, Program.Instructions[i]);
       attroff(A_REVERSE);
       
       if(Program.Assembly[i].Data[Program.Assembly[i].Cursor] != 0) {
-        mvaddch(i-LowerLimit, Program.Assembly[i].Cursor+44, Program.Assembly[i].Data[Program.Assembly[i].Cursor]);
+        mvaddch(i-Program.LowerLimit+1, Program.Assembly[i].Cursor+44, Program.Assembly[i].Data[Program.Assembly[i].Cursor]);
       } else {
-        mvaddch(i-LowerLimit, Program.Assembly[i].Cursor+44, ' ');
+        mvaddch(i-Program.LowerLimit+1, Program.Assembly[i].Cursor+44, ' ');
       }
     } else {
-      mvprintw(i-LowerLimit, 0, "%04d:%-02d| %32s | %-32s | %08X", i+1, Program.Assembly[i].Cursor+1,
+      mvprintw(i-Program.LowerLimit+1, 0, "%04d:%0-2d| %32s | %-32s | %08X", i+1, Program.Assembly[i].Cursor+1,
         Disassembly, Program.Assembly[i].Data, Program.Instructions[i]);
       clrtoeol();
     }
-    free(Disassembly);
   }
+
+  free(Disassembly);
 }
 
-void SaveProgram(program Program)
-{
+void EditorMainLoop(program*Program) {
+  int Key;
+  do { inputhandler:
+    RenderEditor(*Program); // renders constantly :(
+    Key = getch();
+    switch(Key) {
+      case -1:
+        goto inputhandler;
+      break;
 
+      case KEY_F(2):
+        SaveProgram(*Program);
+      break;
+
+      case '\r':
+      case '\n':
+        if(!(Program->Length < Program->Capacity-1)) {
+          ExtendInstructions(Program);
+        }
+
+        if(Program->Cursor < Program->Length) {
+          Program->Cursor++;
+          ShiftProgramRight(Program, 1);
+        } else if(Program->Length < Program->Capacity) {
+          Program->Cursor++;
+        }
+
+        if(Program->Cursor >= Program->LowerLimit+SY-1) {
+          Program->LowerLimit++;
+        }
+      break;
+
+      case KEY_BACKSPACE:
+        if(Program->Assembly[Program->Cursor].Cursor > 0) {
+          ShiftStringLeft(&Program->Assembly[Program->Cursor], 1);
+          Program->Assembly[Program->Cursor].Cursor--;
+        } else if(Program->Cursor > 0) {
+          if(Program->Cursor < Program->Length-1) {
+            Program->Cursor++;
+            ShiftProgramLeft(Program, 1);
+            Program->Cursor--;
+            Program->Cursor--;
+          } else {
+            Program->Instructions[Program->Cursor] = 0;
+            ResetString(&Program->Assembly[Program->Cursor]);
+            Program->Length--;
+            Program->Cursor--;
+          }
+        }
+
+        if(Program->Cursor < Program->LowerLimit) {
+          Program->LowerLimit--;
+        }
+      break;
+
+      case KEY_DC:
+        if(Program->Assembly[Program->Cursor].Cursor < Program->Assembly[Program->Cursor].Length) {
+          Program->Assembly[Program->Cursor].Cursor++;
+          ShiftStringLeft(&Program->Assembly[Program->Cursor], 1);
+          Program->Assembly[Program->Cursor].Cursor--;
+        } else if(Program->Cursor < Program->Length-1) {
+          Program->Cursor++;
+          Program->Cursor++;
+          ShiftProgramLeft(Program, 1);
+          Program->Cursor--;
+          Program->Cursor--;
+        }
+      break;
+
+      case KEY_UP:
+        if(Program->Cursor > 0) {
+          Program->Cursor--;
+          if(Program->Cursor < Program->LowerLimit) {
+            Program->LowerLimit--;
+          }
+        } else {
+          Program->Assembly[Program->Cursor].Cursor = 0;
+        }
+      break;
+
+      case KEY_DOWN:
+        if(Program->Cursor < Program->Length-1) {
+          Program->Cursor++;
+          if(Program->Cursor >= Program->LowerLimit+SY-2) {
+            Program->LowerLimit++;
+          }
+        } else {
+          Program->Assembly[Program->Cursor].Cursor = Program->Assembly[Program->Cursor].Length;
+        }
+      break;
+
+      case KEY_LEFT:
+        if(Program->Assembly[Program->Cursor].Cursor > 0) {
+          Program->Assembly[Program->Cursor].Cursor--;
+        } else if(Program->Cursor > 0) {
+          Program->Cursor--;
+        }
+      break;
+
+      case KEY_RIGHT:
+        if(Program->Assembly[Program->Cursor].Cursor < Program->Assembly[Program->Cursor].Length) {
+          Program->Assembly[Program->Cursor].Cursor++;
+        } else if(Program->Cursor < Program->Length-1) {
+          Program->Cursor++;
+        }
+      break;
+
+      case KEY_HOME:
+        Program->Assembly[Program->Cursor].Cursor = 0;
+      break;
+
+      case KEY_END:
+        Program->Assembly[Program->Cursor].Cursor = Program->Assembly[Program->Cursor].Length;
+      break;
+
+      case KEY_NPAGE:
+        int UL = SY-2 > Program->Length? Program->Length:SY-1;
+        Program->Cursor = Program->LowerLimit + UL - 1;
+      break;
+
+      case KEY_PPAGE:
+        Program->Cursor = Program->LowerLimit;
+      break;
+
+      default:
+        if(Program->Assembly[Program->Cursor].Cursor < Program->Assembly[Program->Cursor].Length) {
+          ShiftStringRight(&Program->Assembly[Program->Cursor], 1);
+          Program->Assembly[Program->Cursor].Data[Program->Assembly[Program->Cursor].Cursor] = Key;
+          Program->Assembly[Program->Cursor].Cursor++;
+        } else if(Program->Assembly[Program->Cursor].Length < Program->Assembly[Program->Cursor].Capacity) {
+          Program->Assembly[Program->Cursor].Data[Program->Assembly[Program->Cursor].Cursor] = Key;
+          Program->Assembly[Program->Cursor].Cursor++;
+          Program->Assembly[Program->Cursor].Length++;
+        }
+
+        Program->Instructions[Program->Cursor] = Assemble(Program->Assembly[Program->Cursor]);
+      break;
+    }
+  } while(Key != KEY_F(1));
 }
 
 int main(int argc, char**argv) {
@@ -173,141 +380,13 @@ int main(int argc, char**argv) {
   program Program;
   InitializeProgram(&Program);
 
-  int Key;
-  do { inputhandler:
-    Render(Program); // renders constantly :(
-    Key = getch();
-    switch(Key) {
-      case -1:
-        goto inputhandler;
-      break;
+  attron(A_REVERSE);
+  mvprintw(0, 0, "ADDR:CR|            Disassembly           |             Assembly             |   Raw   ");
+  attroff(A_REVERSE);
 
-      case KEY_F(2):
-        SaveProgram(Program);
-      break;
+  EditorMainLoop(&Program);
 
-      case '\r':
-      case '\n':
-        if(!(Program.Length < Program.Capacity-1)) {
-          ExtendInstructions(&Program);
-        }
-
-        if(Program.Cursor < Program.Length) {
-          Program.Cursor++;
-          ShiftProgramRight(&Program, 1);
-        } else if(Program.Length < Program.Capacity) {
-          Program.Cursor++;
-        }
-
-        if(Program.Cursor >= LowerLimit+SY) {
-          LowerLimit++;
-        }
-      break;
-
-      case KEY_BACKSPACE:
-        if(Program.Assembly[Program.Cursor].Cursor > 0) {
-          ShiftStringLeft(&Program.Assembly[Program.Cursor], 1);
-          Program.Assembly[Program.Cursor].Cursor--;
-        } else if(Program.Cursor > 0) {
-          if(Program.Cursor < Program.Length-1) {
-            Program.Cursor++;
-            ShiftProgramLeft(&Program, 1);
-            Program.Cursor--;
-            Program.Cursor--;
-          } else {
-            Program.Instructions[Program.Cursor] = 0;
-            ResetString(&Program.Assembly[Program.Cursor]);
-            Program.Length--;
-            Program.Cursor--;
-          }
-        }
-
-        if(Program.Cursor < LowerLimit) {
-          LowerLimit--;
-        }
-      break;
-
-      case KEY_DC:
-        if(Program.Assembly[Program.Cursor].Cursor < Program.Assembly[Program.Cursor].Length) {
-          Program.Assembly[Program.Cursor].Cursor++;
-          ShiftStringLeft(&Program.Assembly[Program.Cursor], 1);
-          Program.Assembly[Program.Cursor].Cursor--;
-        } else if(Program.Cursor < Program.Length-1) {
-          Program.Cursor++;
-          Program.Cursor++;
-          ShiftProgramLeft(&Program, 1);
-          Program.Cursor--;
-          Program.Cursor--;
-        }
-      break;
-
-      case KEY_UP:
-        if(Program.Cursor > 0) {
-          Program.Cursor--;
-          if(Program.Cursor < LowerLimit) {
-            LowerLimit--;
-          }
-        } else {
-          Program.Assembly[Program.Cursor].Cursor = 0;
-        }
-      break;
-
-      case KEY_DOWN:
-        if(Program.Cursor < Program.Length-1) {
-          Program.Cursor++;
-          if(Program.Cursor >= LowerLimit+SY) {
-            LowerLimit++;
-          }
-        } else {
-          Program.Assembly[Program.Cursor].Cursor = Program.Assembly[Program.Cursor].Length;
-        }
-      break;
-
-      case KEY_LEFT:
-        if(Program.Assembly[Program.Cursor].Cursor > 0) {
-          Program.Assembly[Program.Cursor].Cursor--;
-        } else if(Program.Cursor > 0) {
-          Program.Cursor--;
-        }
-      break;
-
-      case KEY_RIGHT:
-        if(Program.Assembly[Program.Cursor].Cursor < Program.Assembly[Program.Cursor].Length) {
-          Program.Assembly[Program.Cursor].Cursor++;
-        } else if(Program.Cursor < Program.Length-1) {
-          Program.Cursor++;
-        }
-      break;
-
-      case KEY_HOME:
-        Program.Assembly[Program.Cursor].Cursor = 0;
-      break;
-
-      case KEY_END:
-        Program.Assembly[Program.Cursor].Cursor = Program.Assembly[Program.Cursor].Length;
-      break;
-
-      case KEY_NPAGE:
-      break;
-
-      case KEY_PPAGE:
-      break;
-
-      default:
-        if(Program.Assembly[Program.Cursor].Cursor < Program.Assembly[Program.Cursor].Length) {
-          ShiftStringRight(&Program.Assembly[Program.Cursor], 1);
-          Program.Assembly[Program.Cursor].Data[Program.Assembly[Program.Cursor].Cursor] = Key;
-          Program.Assembly[Program.Cursor].Cursor++;
-        } else if(Program.Assembly[Program.Cursor].Length < Program.Assembly[Program.Cursor].Capacity) {
-          Program.Assembly[Program.Cursor].Data[Program.Assembly[Program.Cursor].Cursor] = Key;
-          Program.Assembly[Program.Cursor].Cursor++;
-          Program.Assembly[Program.Cursor].Length++;
-        }
-
-        Program.Instructions[Program.Cursor] = Assemble(Program.Assembly[Program.Cursor]);
-      break;
-    }
-  } while(Key != KEY_F(1));
+  TerminateNCurses();
 
   return 0;
 }

@@ -19,10 +19,8 @@ uint32_t SignExtendOffset(uint32_t Instruction)
 
 /*    Disassembler    */
 // see: https://twitter.com/nikitonsky/status/1615754231687921666
-char*DisassembleALInstruction(uint32_t Instruction)
+void DisassembleALInstruction(uint32_t Instruction, char*Buffer)
 {
-  char*Buffer = (char*)malloc(32*sizeof(char));
-
   if(Instruction == 0 || Instruction == 0x80) { sprintf(Buffer, "noop"); return Buffer; }
 
   switch((Instruction>>4)&7)
@@ -91,13 +89,10 @@ char*DisassembleALInstruction(uint32_t Instruction)
     }
   break;
   }
-
-  return Buffer;
 }
 
-char*DisassembleLSInstruction(uint32_t Instruction)
+void DisassembleLSInstruction(uint32_t Instruction, char*Buffer)
 {
-  char*Buffer = (char*)malloc(32*sizeof(char));
   uint32_t Offset = GetX(Instruction)? SignExtendXEmbedded(Instruction) : SignExtendOffset(Instruction);
 
   switch((Instruction>>4)&7)
@@ -154,13 +149,10 @@ char*DisassembleLSInstruction(uint32_t Instruction)
     sprintf(Buffer, "invalid instruction");
   break;
   }
-
-  return Buffer;
 }
 
-char*DisassembleCJInstruction(uint32_t Instruction)
+void DisassembleCJInstruction(uint32_t Instruction, char*Buffer)
 {
-  char*Buffer = (char*)malloc(32*sizeof(char));
   uint32_t Offset = GetX(Instruction)? SignExtendXEmbedded(Instruction) : SignExtendOffset(Instruction);
   
   switch((Instruction>>4)&7)
@@ -229,14 +221,10 @@ char*DisassembleCJInstruction(uint32_t Instruction)
     }
   break;
   }
-
-  return Buffer;
 }
 
-char*DisassembleCCInstruction(uint32_t Instruction)
+void DisassembleCCInstruction(uint32_t Instruction, char*Buffer)
 {
-  char*Buffer = (char*)malloc(32*sizeof(char));
-
   switch((Instruction>>4)&27)
   {
   case 0:
@@ -255,31 +243,26 @@ char*DisassembleCCInstruction(uint32_t Instruction)
     sprintf(Buffer, "Halt Core\n");
   break;
   }
-
-  return Buffer;
 }
 
-char*Disassemble(uint32_t Instruction)
+void Disassemble(uint32_t Instruction, char*Buffer)
 {
-  char*Buffer;
   switch (Instruction&3)
   {
   case 0:
-    Buffer = DisassembleALInstruction(Instruction);
+    DisassembleALInstruction(Instruction, Buffer);
   break;
 
   case 1:
-    Buffer = DisassembleLSInstruction(Instruction);
+    DisassembleLSInstruction(Instruction, Buffer);
   break;
 
   case 2:
-    Buffer = DisassembleCJInstruction(Instruction);
+    DisassembleCJInstruction(Instruction, Buffer);
   break;
 
   case 3:
-    Buffer = DisassembleCCInstruction(Instruction);
+    DisassembleCCInstruction(Instruction, Buffer);
   break;
   }
-
-  return Buffer;
 }
